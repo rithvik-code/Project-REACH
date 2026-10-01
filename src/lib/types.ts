@@ -27,6 +27,13 @@ export interface LiveLocation {
   note: string;
 }
 
+export interface MapBasemap {
+  label: string;
+  url: string;
+  attribution: string;
+  maxNativeZoom?: number;
+}
+
 /** A forecast weather disturbance derived from the live hourly forecast. */
 export interface Disturbance {
   id: string;
