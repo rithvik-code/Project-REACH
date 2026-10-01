@@ -1,0 +1,204 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-base-950 text-ink font-sans antialiased;
+    margin: 0;
+    overscroll-behavior: none;
+  }
+
+  ::selection {
+    background: rgba(56, 189, 248, 0.35);
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #2a3348 transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 9px;
+    height: 9px;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: #232c40;
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: #33405c;
+    background-clip: content-box;
+  }
+
+  input,
+  textarea,
+  select,
+  button {
+    font: inherit;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply rounded-2xl border border-base-800 bg-base-900/70;
+  }
+
+  .panel-tight {
+    @apply rounded-xl border border-base-800 bg-base-850/70;
+  }
+
+  .grid-lines {
+    background-image:
+      linear-gradient(rgba(56, 189, 248, 0.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(56, 189, 248, 0.045) 1px, transparent 1px);
+    background-size: 38px 38px;
+  }
+
+  /* Kept as a hook for micro-labels, but much quieter than a full HUD. */
+  .hud-text {
+    @apply text-[10px] font-medium uppercase tracking-[0.1em] text-ink-faint;
+  }
+
+  .btn {
+    @apply inline-flex select-none items-center justify-center gap-1.5 rounded-xl border border-base-700/70
+      bg-base-850 px-3.5 py-2 text-sm font-medium text-ink transition
+      hover:border-base-600 hover:bg-base-800 active:scale-[0.99]
+      focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-threat-info
+      disabled:cursor-not-allowed disabled:opacity-45;
+  }
+
+  .btn-primary {
+    @apply border-threat-info/40 bg-threat-info/15 text-threat-info hover:border-threat-info/60 hover:bg-threat-info/25;
+  }
+
+  .btn-danger {
+    @apply border-threat-critical/50 bg-threat-critical/15 text-threat-critical hover:border-threat-critical/70 hover:bg-threat-critical/25;
+  }
+
+  .btn-ghost {
+    @apply border-transparent bg-transparent text-ink-muted hover:bg-base-850 hover:text-ink;
+  }
+
+  .field {
+    @apply w-full rounded-xl border border-base-700/80 bg-base-900 px-3 py-2 text-sm text-ink
+      placeholder:text-ink-faint focus:border-threat-info/60 focus:outline-none;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-base-700/70 bg-base-850/60 px-2.5 py-1 text-[11px] font-medium;
+  }
+}
+
+/* ---------------- Leaflet dark theme ---------------- */
+.leaflet-container {
+  background: #05070c;
+  font-family: inherit;
+  outline: none;
+}
+
+.leaflet-control-attribution {
+  background: rgba(8, 11, 18, 0.75) !important;
+  color: #67748c !important;
+  font-size: 10px !important;
+  backdrop-filter: blur(6px);
+}
+
+.leaflet-control-attribution a {
+  color: #4b5a75 !important;
+}
+
+.leaflet-bar,
+.leaflet-control-zoom {
+  border: 1px solid #1b2233 !important;
+  overflow: hidden;
+  border-radius: 12px !important;
+  box-shadow: 0 10px 26px -14px rgba(0, 0, 0, 0.9) !important;
+}
+
+.leaflet-control-zoom a {
+  background: rgba(15, 20, 31, 0.92) !important;
+  color: #9aa7bd !important;
+  border-bottom-color: #1b2233 !important;
+}
+
+.leaflet-control-zoom a:hover {
+  background: rgba(27, 34, 51, 0.95) !important;
+  color: #e7ecf5 !important;
+}
+
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+  background: rgba(11, 15, 24, 0.96) !important;
+  color: #e7ecf5 !important;
+  border: 1px solid #26304a;
+  border-radius: 14px !important;
+  box-shadow: 0 24px 60px -24px rgba(0, 0, 0, 0.95) !important;
+}
+
+.leaflet-popup-content {
+  margin: 12px 14px !important;
+  font-size: 12px !important;
+  line-height: 1.5 !important;
+}
+
+.leaflet-popup-close-button {
+  color: #67748c !important;
+}
+
+.leaflet-tooltip {
+  background: rgba(11, 15, 24, 0.94) !important;
+  border: 1px solid #26304a !important;
+  color: #e7ecf5 !important;
+  border-radius: 8px !important;
+  font-size: 11px !important;
+}
+
+.reach-pulse {
+  border-radius: 9999px;
+  animation: pulseRing 2.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulseRing {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.85;
+  }
+  70% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+
+.leaflet-interactive {
+  transition: stroke-opacity 0.25s ease, fill-opacity 0.25s ease;
+}
+
+.reach-marker {
+  background: transparent !important;
+  border: none !important;
+}
+
+/* The map is light in Streets mode — keep controls legible on a pale basemap. */
+.leaflet-container .leaflet-bar a,
+.leaflet-container .leaflet-control-zoom a {
+  font-weight: 600;
+}

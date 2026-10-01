@@ -1,0 +1,19 @@
+{
+  "name": "REACH — Intelligent Disaster Response & Resilience System",
+  "short_name": "REACH",
+  "description": "Multi-hazard disaster risk analysis, least-risk emergency routing and offline-first response coordination.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#05070c",
+  "theme_color": "#080b12",
+  "orientation": "any",
+  "categories": ["utilities", "productivity", "navigation"],
+  "icons": [
+    {
+      "src": "/reach-mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
