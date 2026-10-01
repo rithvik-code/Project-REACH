@@ -4,11 +4,60 @@
 import { runAnalysis, computeRoute, anchorOf } from '../src/lib/engine/analysis';
 import { DEFAULT_SCENARIO, SCENARIO_PRESETS, buildHazardState } from '../src/lib/engine/hazard';
 import { buildGraph, shortestPath } from '../src/lib/engine/routing';
-import { answerQuery, knowledgeStats } from '../src/lib/engine/assistant';
+import {
+  answerQuery,
+  buildTinySystemPrompt,
+  detectUrgency,
+  knowledgeStats,
+  retrieveForLlm,
+} from '../src/lib/engine/assistant';
+import {
+  assessProximity,
+  eventsWithinWatch,
+  geolocateReliefweb,
+  normalizeGdacs,
+  normalizeReliefweb,
+  normalizeUsgs,
+  ringFor,
+} from '../src/lib/engine/globalFeeds';
 import { detectDisturbances, fireWeatherIndex } from '../src/lib/engine/weather';
 import { formatDistance, formatDuration } from '../src/lib/engine/directions';
+import { speakableText, splitSentences } from '../src/lib/engine/voice';
 import { ZONES, ZONE_BY_ID, SHELTERS } from '../src/lib/data/region';
 import type { RoadClosure } from '../src/lib/types';
+
+/* Fixtures — network-free stand-ins shaped exactly like the live payloads. */
+const USGS_FIXTURE = {
+  features: [
+    {
+      id: 'us1001',
+      properties: { mag: 6.3, place: 'Hindu Kush region', time: 1_699_999_000_000, url: 'https://earthquake.usgs.gov/x', tsunami: 0, title: 'M 6.3 - Hindu Kush region' },
+      geometry: { coordinates: [71.2, 36.5, 210] },
+    },
+    {
+      id: 'us1002',
+      properties: { mag: 3.1, place: 'Nepal', time: 1_699_998_000_000, tsunami: 0, title: 'M 3.1 - Nepal' },
+      geometry: { coordinates: [85.3, 27.7, 10] },
+    },
+  ],
+};
+const GDACS_FIXTURE = {
+  features: [
+    {
+      id: 'gd1',
+      properties: { eventname: 'Assam Floods', eventtype: 'Flood', alertlevel: 'RED', isocountry: 'IND', fromdate: 1_699_990_000_000 },
+      geometry: { coordinates: [78.4, 30.15] },
+    },
+  ],
+};
+const RELIEFWEB_FIXTURE = {
+  data: [
+    {
+      id: 'rw1',
+      fields: { name: 'India: Monsoon Floods 2026', date: { event: '2026-09-28T00:00:00Z' }, country: [{ name: 'India' }], type: ['Flood'], url: 'https://reliefweb.int/x' },
+    },
+  ],
+};
 
 const closures: RoadClosure[] = [];
 let failures = 0;
@@ -338,6 +387,66 @@ check('short distances read in metres', formatDistance(640) === '640 m', formatD
 check('long distances read in kilometres', formatDistance(12400) === '12 km', formatDistance(12400));
 check('durations roll over to hours', formatDuration(5400).includes('hr'), formatDuration(5400));
 check('short durations stay in minutes', formatDuration(1500) === '25 min', formatDuration(1500));
+
+console.log('\n=== 13. Assistant urgency pre-pass + KB ===');
+{
+  const u1 = detectUrgency('there is fire in my kitchen right now');
+  check('lived fire phrasing is urgent', u1.urgent && u1.hotline?.number === '101', u1.reason);
+  const u2 = detectUrgency('my father is not breathing');
+  check('cardiac phrasing is urgent with 108', u2.urgent && u2.hotline?.number === '108');
+  const u3 = detectUrgency('we are trapped on the roof');
+  check('trapped maps to NDRF', u3.urgent && u3.hotline?.number === '011-24363260');
+  const u4 = detectUrgency('what should I do during a fire?');
+  check('educational fire phrasing is NOT urgent', !u4.urgent);
+  check('KB grew to 45 topics', knowledgeStats().entries === 45, String(knowledgeStats().entries));
+  const kbHit = answerQuery('what should I do during a landslide', {
+    analysis: base,
+    offline: false,
+    profile: '',
+    selectedZoneId: null,
+  });
+  check('KB retrieval still answers landslide guidance', kbHit.kind === 'guidance' && /landslide/i.test(kbHit.title));
+  const retrieval = retrieveForLlm('someone is missing after the flood', {
+    analysis: base,
+    offline: false,
+    profile: '',
+    selectedZoneId: null,
+  });
+  check('retrieval bundles topics for the LLM tiers', retrieval.topics.length >= 1 && retrieval.systemData.length > 40);
+  check(
+    'tiny system prompt forbids invention and mandates hotline',
+    /do not know/i.test(buildTinySystemPrompt(retrieval, { analysis: base, offline: false, profile: '', selectedZoneId: null })) &&
+      /Emergency number:/.test(buildTinySystemPrompt(retrieval, { analysis: base, offline: false, profile: '', selectedZoneId: null })),
+  );
+}
+
+console.log('\n=== 14. Global feeds + proximity rings ===');
+{
+  const usgs = normalizeUsgs(USGS_FIXTURE, 1_700_000_000_000);
+  check('USGS fixture normalises', usgs.length === 2 && usgs[0].kind === 'earthquake');
+  check('USGS severity scales with magnitude', usgs[0].severity > usgs[1].severity, `${usgs[0].severity} vs ${usgs[1].severity}`);
+  const gd = normalizeGdacs(GDACS_FIXTURE, 1_700_000_000_000);
+  check('GDACS fixture normalises flood with red belt', gd.length === 1 && gd[0].kind === 'flood' && gd[0].severity === 90);
+  const rw = geolocateReliefweb(normalizeReliefweb(RELIEFWEB_FIXTURE, 1_700_000_000_000));
+  check('ReliefWeb record geolocates to India centroid', rw.length === 1 && Math.abs(rw[0].lat - 21) < 0.01 && Math.abs(rw[0].lng - 78) < 0.01);
+
+  const home = { lat: 30.17, lng: 78.41 }; // ~2 km from the GDACS fixture event
+  const all = [...usgs, ...gd];
+  const near = assessProximity(all, home);
+  const close = near[0];
+  check('close event lands in a ring, far one does not', close.ring !== 'far' && near[near.length - 1].ring === 'far');
+  check('ring boundaries: 1.5 km severe / 3 km high / 8 km watch', ringFor(1.5) === 'severe' && ringFor(3) === 'high' && ringFor(8) === 'watch' && ringFor(12) === 'far');
+  check('compass bearing resolves', close.compass.length > 0 && close.compass.length <= 3, close.compass);
+  check('watch-ring events are surfaced', eventsWithinWatch(near).length === 1);
+}
+
+console.log('\n=== 15. Voice helpers ===');
+{
+  const sentences = splitSentences('Move now. Take water, 5.5 litres. Then call 108!');
+  check('sentence splitter keeps decimals intact', sentences.length === 3 && sentences[1].includes('5.5'), sentences.join(' | '));
+  const spoken = speakableText('**Go** to the `highest` floor. - take water\nEmergency number: 108 — ambulance');
+  check('speakable text strips markup and hotline', !spoken.includes('**') && !spoken.includes('Emergency number:'), spoken);
+}
 
 console.log('\n=== 9. Determinism ===');
 const a1 = runAnalysis({ hourOffset: 6, scenario: DEFAULT_SCENARIO, closures, offline: false });

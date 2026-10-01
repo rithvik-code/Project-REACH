@@ -10,10 +10,14 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "verify": "tsx scripts/verify.ts",
+    "doc:stack": "tsx scripts/techstack.ts",
     "preview:file": "vite build && node scripts/inline.mjs"
   },
   "dependencies": {
+    "@mlc-ai/web-llm": "^0.2.85",
+    "@supabase/supabase-js": "^2.117.2",
     "clsx": "^2.1.1",
+    "docx": "^9.8.1",
     "leaflet": "^1.9.4",
     "lucide-react": "^0.454.0",
     "react": "^18.3.1",

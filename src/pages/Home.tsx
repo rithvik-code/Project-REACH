@@ -4,10 +4,12 @@ import {
   Building2,
   Clock,
   Compass,
+  Globe,
   HeartPulse,
   HelpCircle,
   MapPin,
   Phone,
+  Radio,
   Route as RouteIcon,
   ShieldCheck,
   Siren,
@@ -18,8 +20,76 @@ import {
 import type { Analysis } from '../lib/engine/analysis';
 import { useReach, type NavKey } from '../lib/store';
 import { Banner, Bar, LevelPill, Panel, PanelHead, Stat, TONE_HEX } from '../components/ui';
+
+/** Live global + local news strip, rendered on the landing dashboard. */
+function LiveNowPanel() {
+  const events = useReach((s) => s.globalEvents);
+  const setNav = useReach((s) => s.setNav);
+  const broadcasts = useReach((s) => s.broadcasts);
+  const fetchedAt = useReach((s) => s.globalFetchedAt);
+  const top = rankForNews(events, 6);
+
+  return (
+    <Panel>
+      <PanelHead
+        title="Happening now"
+        subtitle={
+          broadcasts.length
+            ? `1 official broadcast active · ${events.length} live global events${fetchedAt ? ` · updated ${new Date(fetchedAt).toLocaleTimeString()}` : ''}`
+            : `${events.length} live global events${fetchedAt ? ` · updated ${new Date(fetchedAt).toLocaleTimeString()}` : ''}`
+        }
+        icon={<Radio size={15} />}
+        tone="info"
+        right={
+          <button type="button" className="btn !py-1.5 text-[11px]" onClick={() => setNav('global')}>
+            Open global map <ArrowRight size={12} />
+          </button>
+        }
+      />
+      <div className="grid gap-2 p-4 md:grid-cols-2 xl:grid-cols-3">
+        {broadcasts.slice(0, 2).map((b) => (
+          <button
+            key={b.id}
+            type="button"
+            onClick={() => setNav('community')}
+            className="rounded-xl border p-3 text-left transition hover:brightness-110"
+            style={{ borderColor: b.severity === 'critical' ? `${TONE_HEX.critical}66` : `${TONE_HEX.elevated}66`, background: b.severity === 'critical' ? `${TONE_HEX.critical}12` : `${TONE_HEX.elevated}12` }}
+          >
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: b.severity === 'critical' ? TONE_HEX.critical : TONE_HEX.elevated }}>
+              Official broadcast
+            </div>
+            <div className="mt-1 text-[12.5px] font-semibold text-ink">{b.title}</div>
+            <div className="mt-0.5 truncate text-[10.5px] text-ink-faint">{b.author}</div>
+          </button>
+        ))}
+        {top.map((e) => {
+          const meta = EVENT_KIND_META[e.kind];
+          return (
+            <button
+              key={e.id}
+              type="button"
+              onClick={() => setNav('global')}
+              className="rounded-xl border border-base-700/60 bg-base-850/60 p-3 text-left transition hover:border-base-600 hover:bg-base-800/70"
+            >
+              <div className="flex items-center gap-2 text-[10.5px]" style={{ color: meta.color }}>
+                <span className="h-1.5 w-1.5 rounded-full" style={{ background: meta.color }} />
+                {meta.label} · {SOURCE_LABEL[e.source]} · {e.severityLabel}
+              </div>
+              <div className="mt-1 line-clamp-2 text-[12.5px] font-medium text-ink">{e.title}</div>
+              <div className="mt-0.5 truncate text-[10.5px] text-ink-faint">{e.place}</div>
+            </button>
+          );
+        })}
+        {!top.length && !broadcasts.length ? (
+          <p className="text-[12px] text-ink-faint">Connecting to live global feeds…</p>
+        ) : null}
+      </div>
+    </Panel>
+  );
+}
 import { ZONE_BY_ID } from '../lib/data/region';
 import { formatCompact, formatNumber, riskColor } from '../lib/geo';
+import { EVENT_KIND_META, SOURCE_LABEL, rankForNews } from '../lib/engine/globalFeeds';
 import clsx from 'clsx';
 
 interface Intent {
@@ -61,6 +131,14 @@ const INTENTS: Intent[] = [
     title: 'Ask a question',
     blurb: '“What do I carry?” “What if someone is missing?” — answered offline by REACH Assistant.',
     icon: Bot,
+    tone: 'accent',
+    audience: ['resident', 'operator'],
+  },
+  {
+    key: 'global',
+    title: 'Disasters worldwide',
+    blurb: 'Live global map — quakes, floods, cyclones and fires, with alerts when danger comes within 10 km of you.',
+    icon: Globe,
     tone: 'accent',
     audience: ['resident', 'operator'],
   },
@@ -288,6 +366,9 @@ export function Home({ analysis }: { analysis: Analysis }) {
           </div>
         </div>
       </Panel>
+
+      {/* ---------- live news strip ---------- */}
+      <LiveNowPanel />
 
       {/* ---------- domino warning ---------- */}
       {analysis.domino.criticalityScore >= 20 ? (

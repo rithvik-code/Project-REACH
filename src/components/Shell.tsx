@@ -5,6 +5,7 @@ import {
   Bot,
   Building2,
   Clock,
+  Globe,
   LayoutDashboard,
   Map as MapIcon,
   Menu,
@@ -33,18 +34,64 @@ export const NAV_ITEMS: {
   icon: typeof MapIcon;
   blurb: string;
   group: string;
+  /** management-only pages are hidden from the citizen portal */
+  managementOnly?: boolean;
 }[] = [
   { key: 'home', label: 'Start here', icon: ShieldCheck, blurb: 'Pick what you need', group: '' },
-  { key: 'command', label: 'Command Center', icon: LayoutDashboard, blurb: 'The whole picture', group: 'Respond' },
-  { key: 'map', label: 'Live Map', icon: MapIcon, blurb: 'Hazards & directions', group: 'Respond' },
+  { key: 'global', label: 'Global Map', icon: Globe, blurb: 'Disasters worldwide, live', group: '' },
+  { key: 'command', label: 'Command Center', icon: LayoutDashboard, blurb: 'The whole picture', group: 'Respond', managementOnly: true },
+  { key: 'map', label: 'District Map', icon: MapIcon, blurb: 'Hazards & directions', group: 'Respond' },
   { key: 'saferoute', label: 'SafeRoute', icon: Navigation, blurb: 'Least-risk route', group: 'Act' },
-  { key: 'timeline', label: 'Timeline', icon: Clock, blurb: 'Time machine', group: 'Act' },
+  { key: 'timeline', label: 'Timeline', icon: Clock, blurb: 'Time machine', group: 'Act', managementOnly: true },
   { key: 'shelters', label: 'Shelters', icon: Building2, blurb: 'Space & access', group: 'Act' },
   { key: 'sos', label: 'SOS & contacts', icon: Siren, blurb: 'Get help now', group: 'Act' },
   { key: 'community', label: 'Community reports', icon: Users, blurb: 'Alerts & missing people', group: 'Support' },
   { key: 'assistant', label: 'REACH Assistant', icon: Bot, blurb: 'Ask anything', group: 'Support' },
   { key: 'preparedness', label: 'Preparedness', icon: ShieldCheck, blurb: 'Before / during / after', group: 'Support' },
 ];
+
+export function navForPortal(items: typeof NAV_ITEMS, portal: 'citizen' | 'management') {
+  return portal === 'management' ? items : items.filter((i) => !i.managementOnly);
+}
+
+/* ------------------------------------------------------------------ */
+/* Portal switcher (citizen ↔ management)                              */
+/* ------------------------------------------------------------------ */
+
+export function PortalSwitcher({ compact = false }: { compact?: boolean }) {
+  const portal = useReach((s) => s.portal);
+  const setPortal = useReach((s) => s.setPortal);
+  const unlocked = useReach((s) => s.coordinatorUnlocked);
+  return (
+    <div className={clsx('flex items-center rounded-xl border border-base-800 bg-base-850 p-0.5', compact && 'text-[11px]')} role="tablist" aria-label="Portal">
+      <button
+        type="button"
+        role="tab"
+        aria-selected={portal === 'citizen'}
+        onClick={() => setPortal('citizen')}
+        className={clsx(
+          'rounded-lg px-2.5 py-1 font-medium transition',
+          portal === 'citizen' ? 'bg-threat-info/20 text-threat-info' : 'text-ink-muted hover:text-ink',
+        )}
+      >
+        Citizen
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={portal === 'management'}
+        onClick={() => setPortal('management')}
+        title={unlocked ? 'Management portal' : 'Management tools — auto-unlocked when a disaster comes within 10 km of you'}
+        className={clsx(
+          'rounded-lg px-2.5 py-1 font-medium transition',
+          portal === 'management' ? 'bg-threat-elevated/20 text-threat-elevated' : 'text-ink-muted hover:text-ink',
+        )}
+      >
+        Management{!unlocked ? ' ◇' : ''}
+      </button>
+    </div>
+  );
+}
 
 /* ------------------------------------------------------------------ */
 /* Connectivity                                                       */
@@ -95,7 +142,9 @@ export function Sidebar({ analysis }: { analysis: Analysis }) {
   const setNav = useReach((s) => s.setNav);
   const sidebarOpen = useReach((s) => s.sidebarOpen);
   const setSidebarOpen = useReach((s) => s.setSidebarOpen);
+  const portal = useReach((s) => s.portal);
   const readiness = analysis.totals.readiness;
+  const items = navForPortal(NAV_ITEMS, portal);
 
   return (
     <>
@@ -127,10 +176,10 @@ export function Sidebar({ analysis }: { analysis: Analysis }) {
         </div>
 
         <nav className="flex-1 overflow-y-auto px-2 pb-3">
-          {NAV_ITEMS.map((item, i) => {
+          {items.map((item, i) => {
             const active = nav === item.key;
             const Icon = item.icon;
-            const newGroup = item.group && item.group !== NAV_ITEMS[i - 1]?.group;
+            const newGroup = item.group && item.group !== items[i - 1]?.group;
             return (
               <div key={item.key}>
                 {newGroup ? <div className="px-3 pb-1 pt-4 text-[10px] font-medium text-ink-faint">{item.group}</div> : null}
@@ -152,7 +201,10 @@ export function Sidebar({ analysis }: { analysis: Analysis }) {
         </nav>
 
         <div className="border-t border-base-800 px-4 py-3">
-          <div className="flex items-center justify-between text-[11px]">
+          <div className="mb-2.5">
+            <PortalSwitcher />
+          </div>
+          <div className="flex items-center justify-between text-[11px">
             <span className="text-ink-faint">System readiness</span>
             <span
               className="font-mono"
@@ -324,6 +376,9 @@ export function TopBar({ analysis }: { analysis: Analysis }) {
           </button>
 
           <div className="flex shrink-0 items-center gap-1.5">
+            <div className="hidden lg:block">
+              <PortalSwitcher compact />
+            </div>
             <ConnectivityPill compact />
             <button type="button" className="btn !px-2.5 !py-1.5" onClick={() => setNumbersOpen(true)} title="Emergency helplines">
               <Phone size={15} className="text-threat-critical" />

@@ -15,6 +15,30 @@ Two coordinate systems live side by side:
   field, road graph, shelters, hospitals and the decision engine (8 zones, 19
   road nodes, 26 roads, 3 hospitals, 7 shelters, ~88,000 residents).
 
+### What v2 adds
+
+- **Global disaster map** — live **USGS earthquakes**, **GDACS floods / cyclones /
+  wildfires / volcanoes** and **ReliefWeb disaster records** on a world map, with a
+  **2 / 5 / 10 km proximity-ring engine** around your home pin, an estimated
+  **flood-flow direction** from the elevation gradient, one-tap SOS + situation
+  reports inside the rings, and automatic **local-coordinator escalation** when an
+  event closes within 10 km.
+- **Tiny offline AI** — a real LLM (default **Qwen2-0.5B**, optional
+  **Llama-3.2-1B**) running **fully on-device via WebGPU** after a one-time
+  download; it answers with zero internet, grounded in the REACH knowledge base.
+- **Voice conversation** — talk to the assistant; it replies **out loud,
+  sentence-by-sentence as it generates**, in **10 Indian languages**, with barge-in
+  (talking over it interrupts it). Offline speech-to-text via in-browser
+  **Whisper-tiny**. Web Speech recognition online.
+- **Citizen & Management portals** — the sidebar adapts per role; coordinators
+  post **official broadcasts** to a live news feed, verify reports and run the
+  command center; citizens get news-style updates, maps, SOS and the assistant.
+  Both portals **share data across devices in realtime** through an optional free
+  **Supabase** backend (`supabase/schema.sql` + 5-minute setup in
+  `supabase/README.md`); without it, REACH stays fully functional offline-first.
+- **Tech-stack document** — `npm run doc:stack` regenerates
+  `docs/REACH-tech-stack.docx`.
+
 ---
 
 ## Quick start
@@ -79,15 +103,16 @@ weather panel is a safety mechanism, not just a readout.
 
 | Module | What it does |
 | --- | --- |
-| **Start Here** | Intent tiles + the four questions, audience-aware |
+| **Start Here** | Intent tiles + the four questions, audience-aware, with a live "Happening now" news strip |
+| **Global Map** | Worldwide live events, home pin + 2/5/10 km rings, flood-direction estimate, coordinator escalation |
 | **Command Center** | Live weather watch, ranked priority actions, domino chain, zone risk board, scenario simulator |
 | **Live Map** | 11 toggleable layers, real basemaps, directions, zone detail with evacuation + medical access |
 | **SafeRoute** | Least-risk routing, road scanning, blocking, isolation detection, **Why this route?** |
 | **Timeline** | 12 h history ↔ 24 h simulation, hourly slider, peak detection |
 | **Shelters** | Capacity, occupancy, distance, accessibility, risk, facilities; manager updates and community suggestions |
 | **SOS** | One-tap SOS with geolocation, offline queue, emergency number cards |
-| **Community Reports** | Alert feed with verification workflow + missing / safe person board |
-| **REACH Assistant** | 32-topic emergency engine offline, or unlimited chat with your own AI model |
+| **Community Reports** | Alert feed with verification workflow + missing / safe person board, **official broadcasts**, optional Supabase live sync |
+| **REACH Assistant** | 45-topic emergency engine, **offline tiny LLM (WebGPU)**, **voice conversation**, or unlimited cloud chat — every reply ends with the situation hotline |
 | **Preparedness** | Interactive before / during / after checklists per hazard, including fire |
 
 ---

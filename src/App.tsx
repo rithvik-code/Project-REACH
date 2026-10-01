@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { useAnalysis, useReach, useWeatherSync, type NavKey } from './lib/store';
-import { EmergencyDock, Sidebar, TopBar } from './components/Shell';
+import { useAnalysis, useReach, useGlobalFeedsSync, useWeatherSync, type NavKey } from './lib/store';
+import { EmergencyDock, NAV_ITEMS, navForPortal, Sidebar, TopBar } from './components/Shell';
 import { DevicePreviewFrame } from './components/DevicePreview';
 import { Home } from './pages/Home';
 import { CommandCenter } from './pages/CommandCenter';
@@ -12,12 +12,17 @@ import { Sos } from './pages/Sos';
 import { CommunityReports } from './pages/CommunityReports';
 import { Assistant } from './pages/Assistant';
 import { Preparedness } from './pages/Preparedness';
+import { GlobalMap } from './pages/GlobalMap';
 import { Banner, TONE_HEX } from './components/ui';
 import { AlertOctagon } from 'lucide-react';
+import { isSyncConfigured, pullAll, subscribeRealtime } from './lib/engine/supabaseSync';
+import type { Broadcast, CommunityReport, MissingPerson } from './lib/types';
 
 export default function App() {
   const analysis = useAnalysis();
   useWeatherSync();
+  useGlobalFeedsSync();
+
   const nav = useReach((s) => s.nav);
   const setNav = useReach((s) => s.setNav);
   const setConnectivity = useReach((s) => s.setConnectivity);
@@ -26,7 +31,16 @@ export default function App() {
   const flushSosQueue = useReach((s) => s.flushSosQueue);
   const sosAlerts = useReach((s) => s.sosAlerts);
   const emergencyMode = useReach((s) => s.emergencyMode);
+
+  const portal = useReach((s) => s.portal);
+  const coordinatorUnlocked = useReach((s) => s.coordinatorUnlocked);
+  const setSyncStatus = useReach((s) => s.setSyncStatus);
+  const addBroadcast = useReach((s) => s.addBroadcast);
+  const addReport = useReach((s) => s.addReport);
+  const addMissingPerson = useReach((s) => s.addMissingPerson);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  /** Guards against double-inserting rows we already have. */
+  const known = useRef(new Set<string>());
 
   /* ---- real connectivity detection ---- */
   useEffect(() => {
@@ -52,6 +66,99 @@ export default function App() {
     if (emergencyMode && nav === 'home') setNav('map');
   }, [emergencyMode, nav, setNav]);
 
+  /* ---- keep the current page valid when the portal changes ---- */
+  useEffect(() => {
+    const items = navForPortal(NAV_ITEMS, portal);
+    if (!items.some((i) => i.key === nav)) {
+      // Citizen portal hides coordinator pages; fall back somewhere sensible.
+      setNav('home');
+    }
+  }, [portal, nav, setNav]);
+
+  /* ---- Supabase realtime: shared data across devices ---- */
+  useEffect(() => {
+    if (!isSyncConfigured()) {
+      setSyncStatus('idle');
+      return;
+    }
+    // Seed the "known" set with what we already hold.
+    const s = useReach.getState();
+    s.reports.forEach((r) => known.current.add(r.id));
+    s.missingPersons.forEach((m) => known.current.add(m.id));
+    s.broadcasts.forEach((b) => known.current.add(b.id));
+
+    // Pull the current mirror once.
+    void pullAll().then((res) => {
+      res.reports.forEach((r) => {
+        if (!known.current.has(r.id)) {
+          known.current.add(r.id);
+          addReport({ ...r });
+        }
+      });
+      res.missingPersons.forEach((m) => {
+        if (!known.current.has(m.id)) {
+          known.current.add(m.id);
+          addMissingPerson({
+            name: m.name,
+            ageBand: m.ageBand,
+            description: m.description,
+            lastSeenLocation: m.lastSeenLocation,
+            lastSeenAt: m.lastSeenAt,
+            contact: m.contact,
+            contactVisibility: m.contactVisibility,
+          });
+        }
+      });
+      res.broadcasts.forEach((b) => {
+        if (!known.current.has(b.id)) {
+          known.current.add(b.id);
+          addBroadcast(b);
+        }
+      });
+      setSyncStatus('connected');
+    });
+
+    const unsub = subscribeRealtime({
+      onReport: (r: CommunityReport) => {
+        if (known.current.has(r.id)) return;
+        known.current.add(r.id);
+        addReport({ ...r });
+      },
+      onMissing: (m: MissingPerson) => {
+        if (known.current.has(m.id)) return;
+        known.current.add(m.id);
+        addMissingPerson({
+          name: m.name,
+          ageBand: m.ageBand,
+          description: m.description,
+          lastSeenLocation: m.lastSeenLocation,
+          lastSeenAt: m.lastSeenAt,
+          contact: m.contact,
+          contactVisibility: m.contactVisibility,
+        });
+      },
+      onBroadcast: (b: Broadcast) => {
+        if (known.current.has(b.id)) return;
+        known.current.add(b.id);
+        addBroadcast(b);
+      },
+      onStatus: (st) => setSyncStatus(st === 'connected' ? 'connected' : 'error'),
+    });
+    return unsub;
+  }, [addBroadcast, addReport, addMissingPerson, setSyncStatus]);
+
+  /* ---- auto-unlock the management portal inside a watch ring ---- */
+  useEffect(() => {
+    if (coordinatorUnlocked) return;
+    const { homePin, globalEvents } = useReach.getState();
+    if (!homePin || !globalEvents.length) return;
+    void (async () => {
+      const { assessProximity } = await import('./lib/engine/globalFeeds');
+      const nearby = assessProximity(globalEvents, homePin).filter((a) => a.ring !== 'far');
+      if (nearby.length) useReach.getState().setCoordinatorUnlocked(true);
+    })();
+  }, [coordinatorUnlocked, nav]);
+
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
   }, [nav]);
@@ -62,6 +169,7 @@ export default function App() {
 
   const pages: Record<NavKey, React.ReactNode> = {
     home: <Home analysis={analysis} />,
+    global: <GlobalMap />,
     command: <CommandCenter analysis={analysis} />,
     map: <LiveMap analysis={analysis} />,
     saferoute: <SafeRoute analysis={analysis} />,
@@ -140,3 +248,6 @@ export default function App() {
     </DevicePreviewFrame>
   );
 }
+
+/* Re-export so the type checker sees the usage in this module graph. */
+export type { NavKey };

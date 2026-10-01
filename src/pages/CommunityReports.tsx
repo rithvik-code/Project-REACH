@@ -25,7 +25,9 @@ import { useReach } from '../lib/store';
 import { ROADS, SHELTERS, ZONE_BY_ID } from '../lib/data/region';
 import { Banner, EmptyState, LevelPill, Modal, Panel, PanelHead, Segmented, Stat, TONE_HEX } from '../components/ui';
 import { formatDateTime, relativeTime } from '../lib/geo';
-import type { CommunityReport, MissingPerson } from '../lib/types';
+import type { Broadcast, CommunityReport, MissingPerson } from '../lib/types';
+import { Radio, Settings2 } from 'lucide-react';
+import { isSyncConfigured, pullAll, pushWrites, saveConfig } from '../lib/engine/supabaseSync';
 
 const REPORT_KINDS: { value: CommunityReport['kind']; label: string }[] = [
   { value: 'road_closure', label: 'Road closure' },
@@ -171,6 +173,10 @@ export function CommunityReports({ analysis }: { analysis: Analysis }) {
           <Stat label="Reported safe" value={stats.safe} sub="resolved or marked safe" tone="low" icon={<UserCheck size={13} />} />
         </div>
       </Panel>
+
+      <BroadcastsPanel />
+
+      <SyncSettingsPanel />
 
       <div className="flex flex-wrap items-center gap-2">
         <Segmented
@@ -678,5 +684,225 @@ function NoteAdder({ onAdd }: { onAdd: (note: string) => void }) {
         Add
       </button>
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Broadcasts: management → citizen live news feed                      */
+/* ------------------------------------------------------------------ */
+
+function BroadcastsPanel() {
+  const broadcasts = useReach((s) => s.broadcasts);
+  const addBroadcast = useReach((s) => s.addBroadcast);
+  const portal = useReach((s) => s.portal);
+  const coordinatorUnlocked = useReach((s) => s.coordinatorUnlocked);
+  const syncStatus = useReach((s) => s.syncStatus);
+  const [open, setOpen] = useState(false);
+  const [severity, setSeverity] = useState<'info' | 'warning' | 'critical'>('warning');
+  const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
+  const [area, setArea] = useState('');
+
+  const canPost = portal === 'management' || coordinatorUnlocked;
+
+  const post = () => {
+    if (!title.trim()) return;
+    addBroadcast({
+      author: 'Local coordinator',
+      severity,
+      title: title.trim(),
+      body: body.trim(),
+      area: area.trim() || undefined,
+    });
+    setTitle('');
+    setBody('');
+    setArea('');
+    setOpen(false);
+  };
+
+  const toneOf = (s: Broadcast['severity']) =>
+    s === 'critical' ? TONE_HEX.critical : s === 'warning' ? TONE_HEX.elevated : TONE_HEX.info;
+
+  return (
+    <Panel>
+      <PanelHead
+        title="Live news & official broadcasts"
+        subtitle={
+          isSyncConfigured()
+            ? syncStatus === 'connected'
+              ? 'Shared live across all devices through Supabase realtime'
+              : 'Shared backend configured — connecting…'
+            : 'Local to this device — connect Supabase below to share across devices'
+        }
+        icon={<Radio size={15} />}
+        tone="info"
+        right={
+          canPost ? (
+            <button type="button" className="btn btn-primary !px-3 !py-1.5 text-[11.5px]" onClick={() => setOpen(true)}>
+              <Radio size={12} /> Post broadcast
+            </button>
+          ) : null
+        }
+      />
+      <div className="space-y-2 p-4">
+        {broadcasts.length ? (
+          broadcasts.slice(0, 8).map((b) => (
+            <div key={b.id} className="rounded-xl border border-base-700/60 bg-base-850/60 p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span
+                  className="chip text-[10px]"
+                  style={{ color: toneOf(b.severity), borderColor: `${toneOf(b.severity)}55`, background: `${toneOf(b.severity)}14` }}
+                >
+                  {b.severity.toUpperCase()}
+                </span>
+                <span className="text-[12.5px] font-semibold text-ink">{b.title}</span>
+                <span className="ml-auto text-[10.5px] text-ink-faint">
+                  {b.author} · {relativeTime(b.at)} {b.synced ? '' : '· queued'}
+                </span>
+              </div>
+              {b.body ? <p className="mt-1 text-[12px] leading-relaxed text-ink-muted">{b.body}</p> : null}
+              {b.area ? <p className="mt-1 text-[10.5px] text-ink-faint">Area: {b.area}</p> : null}
+            </div>
+          ))
+        ) : (
+          <p className="text-[12px] text-ink-faint">No broadcasts yet. Coordinators' official updates will appear here as a live news feed.</p>
+        )}
+      </div>
+
+      <Modal open={open} onClose={() => setOpen(false)} title="Post an official broadcast" subtitle="Citizens see this instantly as a news item" tone="critical" width="max-w-lg">
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-1.5">
+            {(['info', 'warning', 'critical'] as const).map((s) => (
+              <button key={s} type="button" className={clsx('btn !px-3 !py-1.5 text-[11.5px]', severity === s && 'btn-primary')} onClick={() => setSeverity(s)}>
+                {s.toUpperCase()}
+              </button>
+            ))}
+          </div>
+          <input className="field" placeholder="Headline, e.g. Boats staged at Old Town ghat" value={title} onChange={(e) => setTitle(e.target.value)} />
+          <textarea className="field min-h-[90px]" placeholder="What people should do, where to go, what to avoid…" value={body} onChange={(e) => setBody(e.target.value)} />
+          <input className="field" placeholder="Area (optional), e.g. Old Town / Riverbend" value={area} onChange={(e) => setArea(e.target.value)} />
+          <div className="flex justify-end gap-2">
+            <button type="button" className="btn" onClick={() => setOpen(false)}>
+              Cancel
+            </button>
+            <button type="button" className="btn btn-primary" onClick={post} disabled={!title.trim()}>
+              <Radio size={14} /> Publish
+            </button>
+          </div>
+        </div>
+      </Modal>
+    </Panel>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Supabase shared-sync settings                                        */
+/* ------------------------------------------------------------------ */
+
+export function SyncSettingsPanel() {
+  const supabase = useReach((s) => s.supabase);
+  const setSupabaseConfig = useReach((s) => s.setSupabaseConfig);
+  const syncStatus = useReach((s) => s.syncStatus);
+  const connectivity = useReach((s) => s.connectivity);
+  const simulateOffline = useReach((s) => s.simulateOffline);
+  const reports = useReach((s) => s.reports);
+  const missingPersons = useReach((s) => s.missingPersons);
+  const broadcasts = useReach((s) => s.broadcasts);
+  const [url, setUrl] = useState(supabase?.url ?? '');
+  const [key, setKey] = useState(supabase?.anonKey ?? '');
+  const [msg, setMsg] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const online = connectivity === 'online' && !simulateOffline;
+
+  const connect = () => {
+    if (!url.trim() || !key.trim()) return;
+    const cfg = { url: url.trim(), anonKey: key.trim() };
+    saveConfig(cfg);
+    setSupabaseConfig(cfg);
+    setMsg('Connected. Reports, missing persons and broadcasts now sync across devices in realtime.');
+  };
+
+  const disconnect = () => {
+    saveConfig(null);
+    setSupabaseConfig(null);
+    setMsg('Disconnected. REACH keeps working offline-first on this device.');
+  };
+
+  const flushNow = async () => {
+    setBusy(true);
+    setMsg('');
+    const res = await pushWrites({ reports, missingPersons, broadcasts });
+    setBusy(false);
+    setMsg(res.ok ? 'Pushed local records to the shared backend.' : `Push failed: ${res.error ?? 'unknown error'}`);
+  };
+
+  const pullNow = async () => {
+    setBusy(true);
+    setMsg('');
+    try {
+      const res = await pullAll();
+      setMsg(`Remote mirror holds ${res.reports.length} report(s), ${res.missingPersons.length} missing-person record(s), ${res.broadcasts.length} broadcast(s).`);
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Pull failed');
+    }
+    setBusy(false);
+  };
+
+  return (
+    <Panel>
+      <PanelHead
+        title="Shared sync (Supabase)"
+        subtitle="Optional — links the citizen and management portals across devices"
+        icon={<Settings2 size={15} />}
+        tone="info"
+        right={
+          <span
+            className="chip"
+            style={{
+              color: isSyncConfigured() ? (syncStatus === 'error' ? TONE_HEX.elevated : TONE_HEX.low) : TONE_HEX.neutral,
+              borderColor: `${isSyncConfigured() ? (syncStatus === 'error' ? TONE_HEX.elevated : TONE_HEX.low) : TONE_HEX.neutral}55`,
+            }}
+          >
+            {isSyncConfigured() ? (syncStatus === 'connected' ? 'LIVE SYNC' : syncStatus === 'error' ? 'ERROR' : 'CONFIGURED') : 'OFF'}
+          </span>
+        }
+      />
+      <div className="space-y-3 p-4">
+        {isSyncConfigured() ? (
+          <>
+            <p className="text-[11.5px] leading-relaxed text-ink-muted">
+              Connected to <span className="font-mono text-ink">{supabase?.url}</span>. New reports, missing-person updates and broadcasts from any
+              device appear here instantly; your writes push automatically when online.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className="btn !py-1.5 text-[11.5px]" disabled={busy || !online} onClick={() => void flushNow()}>
+                Push local records now
+              </button>
+              <button type="button" className="btn !py-1.5 text-[11.5px]" disabled={busy || !online} onClick={() => void pullNow()}>
+                Check remote mirror
+              </button>
+              <button type="button" className="btn !py-1.5 text-[11.5px]" onClick={disconnect}>
+                Disconnect
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <input className="field" placeholder="Project URL, e.g. https://abcd.supabase.co" value={url} onChange={(e) => setUrl(e.target.value)} />
+            <input className="field" type="password" placeholder="anon public key (never the service_role key)" value={key} onChange={(e) => setKey(e.target.value)} />
+            <button type="button" className="btn btn-primary" onClick={connect} disabled={!url.trim() || !key.trim()}>
+              Connect shared backend
+            </button>
+            <p className="text-[10.5px] leading-relaxed text-ink-faint">
+              Create a free project at supabase.com, run <span className="font-mono">supabase/schema.sql</span> in its SQL editor, then paste the
+              Project URL and anon key here. Full steps live in <span className="font-mono">supabase/README.md</span>. Without this, REACH stays
+              fully functional offline-first on this device.
+            </p>
+          </>
+        )}
+        {msg ? <p className="text-[11px] text-ink-muted">{msg}</p> : null}
+      </div>
+    </Panel>
   );
 }

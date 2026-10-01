@@ -2,7 +2,7 @@ import { DEFAULT_CONTACTS } from '../data/emergencyContacts';
 import { NATIONAL_HOTLINES } from '../data/india';
 import { ROAD_BY_ID, ZONE_BY_ID } from '../data/region';
 import type { Analysis } from './analysis';
-import type { Hotline } from '../types';
+import type { Hotline, TinyModelId } from '../types';
 import { formatNumber } from '../geo';
 
 export interface AssistantReply {
@@ -21,6 +21,48 @@ export interface AssistantReply {
    * carries one, so the answer always ends with a way to actually get help.
    */
   hotline?: Hotline;
+  /** True when the query itself describes a life-threatening situation. */
+  urgent?: boolean;
+  /** Why the query was classified urgent — shown as a red strip above the answer. */
+  urgentReason?: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Urgency pre-pass                                                    */
+/* ------------------------------------------------------------------ */
+
+export interface UrgencyAssessment {
+  urgent: boolean;
+  reason?: string;
+  hotline?: Hotline;
+}
+
+/**
+ * Ordered most-specific first. Educational phrasing ("what should I do during
+ * a fire?") must NOT match; lived phrasing ("there's fire in my kitchen") must.
+ */
+const URGENT_RULES: { re: RegExp; reason: string; hotline: string }[] = [
+  { re: /not breathing|no pulse|cardiac arrest|heart attack|choking (on|and can)/i, reason: 'Possible cardiac arrest or choking — act now', hotline: '108' },
+  { re: /unconscious|collapsed and|won'?t wake|will not wake|fainted|no response/i, reason: 'Person unresponsive', hotline: '108' },
+  { re: /bleeding (heavily|badly|a lot)|blood everywhere|severe bleeding|spurting blood/i, reason: 'Severe bleeding', hotline: '108' },
+  { re: /drown(ing)?|swept away|going under|under the water/i, reason: 'Drowning emergency', hotline: '108' },
+  { re: /fire (in|nearby|here|right now)|my (house|home|kitchen|building|flat) (is|on)|house fire|building fire|catching fire|clothes (are )?on fire/i, reason: 'Active fire — get out, then call', hotline: '101' },
+  { re: /trapped|buried|stuck under|can'?t get out|cannot get out|no way out/i, reason: 'Person trapped — rescue needed', hotline: '011-24363260' },
+  { re: /snake ?bite|scorpion sting|stung by|bitten by a snake/i, reason: 'Snakebite / venomous sting', hotline: '108' },
+  { re: /gas leak|smell(ing)? gas|lpg leak|cylinder leak/i, reason: 'Gas leak — evacuate, no sparks', hotline: '101' },
+  { re: /electrocut|live wire|current (through|passed)|touching a wire/i, reason: 'Electrocution risk', hotline: '108' },
+  { re: /suicide|self ?harm|kill myself|end my life/i, reason: 'Mental-health crisis', hotline: '112' },
+  { re: /^help( me)?(!|\.)?$/i, reason: 'Distress call received', hotline: '112' },
+  { re: /(someone|person) (is )?(missing|swept|washed away)/i, reason: 'Missing person in an active hazard', hotline: '112' },
+];
+
+export function detectUrgency(query: string): UrgencyAssessment {
+  for (const rule of URGENT_RULES) {
+    if (rule.re.test(query)) {
+      return { urgent: true, reason: rule.reason, hotline: hotlineByNumber(rule.hotline) };
+    }
+  }
+  return { urgent: false };
 }
 
 /** Resolve a hotline from the national registry by number or label fragment. */
@@ -652,6 +694,239 @@ export const KNOWLEDGE_BASE: KbEntry[] = [
     ],
     followups: ['How do I report a shelter capacity change?', 'What should I do after a flood?'],
   },
+  {
+    id: 'earthquake_before',
+    title: 'Preparing for an earthquake',
+    keywords: ['prepare earthquake', 'before earthquake', 'seismic safety', 'strap furniture', 'earthquake kit'],
+    hazard: 'general',
+    phase: 'before',
+    hotline: '112',
+    body: ['Earthquake injury is mostly preventable — it is furniture and glass that hurt people, not the shaking.'],
+    bullets: [
+      'Strap tall cupboards, geysers and water tanks to the wall',
+      'Move heavy objects off high shelves above beds and desks',
+      'Keep shoes, torch and whistle under the bed',
+      'Know the Drop, Cover, Hold On drill until it is automatic',
+      'Locate your gas shut-off valve and practise turning it',
+      'Keep a 3-day water and food cache at home',
+    ],
+    followups: ['What should I do during an earthquake?', 'What should I carry during evacuation?'],
+  },
+  {
+    id: 'flood_car',
+    title: 'Driving in flood conditions',
+    keywords: ['driving', 'car', 'vehicle', 'drive through water', 'car flooded', 'stalled car', 'engine stalled'],
+    hazard: 'flood',
+    phase: 'during',
+    hotline: '1078',
+    body: ['The rule is absolute: Turn Around, Don\u2019t Drown. Sixty centimetres of moving water floats a car; half that can stall the engine.'],
+    bullets: [
+      'Never drive through water of unknown depth — turn around',
+      'If the car stalls in rising water, leave it and climb to higher ground immediately',
+      'If trapped inside: unbelt, open a window or wait for pressure to equalise, then swim out',
+      'Avoid night driving through flooded stretches — depth cannot be judged',
+      'Bridges, causeways and underpasses fail first; treat every one as closed',
+      'If water is rising fast inside the vehicle, call 112 and share your live location',
+    ],
+    followups: ['What should I do during a flood?', 'Which roads should I avoid?'],
+  },
+  {
+    id: 'evacuation_elderly',
+    title: 'Evacuating elderly or disabled family',
+    keywords: ['elderly evacuation', 'wheelchair evacuation', 'disabled', 'cannot walk', 'bedridden', 'immobile'],
+    hazard: 'general',
+    phase: 'during',
+    hotline: '108',
+    body: ['People who cannot self-evacuate must leave first, not last. Most rescue boats and vehicles cannot carry wheelchairs or beds.'],
+    bullets: [
+      'Move them to the nearest safe shelter before general evacuation starts',
+      'Pre-arrange a car, auto or ambulance — 108 can dispatch a medical transport',
+      'Carry medicines for 2 weeks plus prescriptions and a medications card in their pocket',
+      'Bring mobility aids: walker, crutches, spare glasses, hearing-aid batteries',
+      'Register them at the shelter medical post immediately on arrival',
+      'Tell neighbours and the comfort team where they are being taken',
+    ],
+    followups: ['Where is the nearest shelter?', 'What should I carry during evacuation?'],
+  },
+  {
+    id: 'food_safety',
+    title: 'Food safety after a disaster',
+    keywords: ['food', 'eat', 'spoil', 'fridge', 'cooked food', 'stale', 'contaminated food'],
+    hazard: 'flood',
+    phase: 'after',
+    hotline: '1078',
+    body: ['Food-borne illness spikes after every flood. When in doubt, throw it out — dehydration from vomiting is worse than hunger.'],
+    bullets: [
+      'Discard any food touched by floodwater, including sealed cans that are bulging or dented at the seam',
+      'Refrigerated food kept above 4\u00b0C for over 4 hours must be thrown away',
+      'Cook everything thoroughly; avoid raw salads and cut fruit from markets',
+      'Use only boiled or treated water even for brushing teeth',
+      'Wash hands with soap before preparing or eating anything',
+      'Report food shortages at the shelter to the manager immediately',
+    ],
+    followups: ['What are the health risks after a flood?', 'Is drinking water safe?'],
+  },
+  {
+    id: 'epidemic_watch',
+    title: 'Disease outbreaks after floods',
+    keywords: ['epidemic', 'disease', 'fever', 'cholera', 'diarrhoea', 'dengue', 'malaria', 'leptospirosis', 'outbreak'],
+    hazard: 'flood',
+    phase: 'after',
+    hotline: '104',
+    body: ['The week after a flood is disease season. Early reporting of a cluster of fevers can stop an outbreak before it spreads.'],
+    bullets: [
+      'Watch for fever, diarrhoea, jaundice or skin infections — report clusters to the medical post',
+      'Leptospirosis: fever after wading through floodwater — tell the doctor about the exposure',
+      'Do not let children play in standing water; it is a mosquito and sewage soup',
+      'Empty and scrub water containers weekly to break mosquito breeding',
+      'Use mosquito nets and repellents in shelters',
+      'Health helpline 104 gives free medical advice in local languages',
+    ],
+    followups: ['Is drinking water safe?', 'What should I do after a flood?'],
+  },
+  {
+    id: 'children_safety',
+    title: 'Keeping children safe in a disaster',
+    keywords: ['children', 'kids', 'child', 'toddler', 'school', 'infant care', 'unaccompanied child'],
+    hazard: 'general',
+    phase: 'during',
+    hotline: '1098',
+    body: ['Children need truthful, simple explanations and constant physical presence. Separation from family is the biggest risk in crowded shelters.'],
+    bullets: [
+      'Write your name and phone number on a card in the child\u2019s pocket',
+      'Keep a recent photo of each child on your phone',
+      'Teach them: if we get separated, stay where you are and find a uniformed responder',
+      'Keep them away from floodwater, wires and damaged buildings at all times',
+      'Maintain routines — meals, stories, sleep times — to reduce panic',
+      'Unaccompanied children: report to Childline 1098 immediately',
+    ],
+    followups: ['How do I report a missing person?', 'Caring for elderly, children and pets?'],
+  },
+  {
+    id: 'livestock',
+    title: 'Protecting livestock and pets',
+    keywords: ['livestock', 'cattle', 'cow', 'goat', 'farm animals', 'animals', 'pets', 'dog', 'cat'],
+    hazard: 'general',
+    phase: 'before',
+    hotline: '1078',
+    body: ['Farmers who move livestock early lose far fewer animals. Animals sense rising water before people do.'],
+    bullets: [
+      'Move animals to designated elevated enclosures or high ground 24 h before the peak',
+      'Untie them near the peak — tied animals drown; free animals swim',
+      'Carry vaccination records and feed for 3 days when relocating',
+      'Mark pets with a collar tag carrying your phone number',
+      'Report stranded livestock to 1078 — NDRF teams carry animal-rescue gear',
+      'Do not return to a flooded shed alone to fetch animals',
+    ],
+    followups: ['Caring for elderly, children and pets?', 'Where is the nearest shelter?'],
+  },
+  {
+    id: 'insurance_docs',
+    title: 'Documents, insurance and relief claims',
+    keywords: ['documents', 'insurance', 'compensation', 'relief claim', 'loss', 'damage claim', 'aadhaar', 'papers lost'],
+    hazard: 'general',
+    phase: 'after',
+    hotline: '1078',
+    body: ['Relief compensation depends on proof of loss, and replacement documents can be requested online or at camp help desks.'],
+    bullets: [
+      'Photograph every damaged room, item and vehicle before clearing up',
+      'Keep receipts for repairs and emergency purchases',
+      'Report losses to the village/ward officer to enter the damage assessment register',
+      'Lost documents: Aadhaar (1947), voter ID and ration cards can be re-issued at camp help desks',
+      'File crop-loss claims through the agriculture officer within the notified window',
+      'State disaster relief (SDRF) payouts are announced by the district collector — follow 1078',
+    ],
+    followups: ['What should I do after a flood?', 'What are the health risks after a flood?'],
+  },
+  {
+    id: 'coordinator_basics',
+    title: 'Running a shelter or relief point',
+    keywords: ['coordinator', 'manage shelter', 'relief point', 'volunteer', 'organisation', 'logistics'],
+    hazard: 'general',
+    phase: 'during',
+    hotline: '1078',
+    body: ['Good coordination is boring on purpose: registration, inventory, rotation and one channel of truth.'],
+    bullets: [
+      'One registration desk, one ledger — everyone entering is counted',
+      'Track water (3 L/person/day), food, medicines and toilets against headcount',
+      'Post verified updates through REACH so citizens see capacity changes instantly',
+      'Rotate volunteers in shifts; exhaustion causes mistakes after hour 16',
+      'Keep one officer as the single point of contact for 1078 and NDRF',
+      'Log every incident with time, place and action taken',
+    ],
+    followups: ['What is the priority action list?', 'How do I broadcast an official update?'],
+  },
+  {
+    id: 'drone_rescue',
+    title: 'How helicopter and drone rescue works',
+    keywords: ['helicopter', 'air rescue', 'ndrf', 'drone', 'aerial', 'winch', 'air drop', 'evacuation by air'],
+    hazard: 'general',
+    phase: 'during',
+    hotline: '011-24363260',
+    body: ['Aerial rescue is requested through the district control room — NDRF coordinates helicopter sorties for stranded groups and medical emergencies.'],
+    bullets: [
+      'Request via 1078 or NDRF 011-24363260 / 9711077372',
+      'Give GPS coordinates, number of people, injuries and open ground nearby for landing',
+      'Signal with bright cloth arrangements, mirror flashes or torch at night',
+      'Stay clear of the landing zone; approach only from the front after the rotors settle',
+      'Private air ambulance: 9540161344 for critical medical transfers',
+      'Do not crowd rooftops expecting pickup — one designated point, one group',
+    ],
+    followups: ['I am trapped — what do I do?', 'Which hospital is reachable right now?'],
+  },
+  {
+    id: 'emergency_lighting',
+    title: 'Lighting and night safety',
+    keywords: ['light', 'torch', 'dark', 'night', 'candle', 'lantern', 'visibility'],
+    hazard: 'general',
+    phase: 'during',
+    hotline: '112',
+    body: ['Most secondary injuries happen in the dark — falls, open wires and water you cannot judge.'],
+    bullets: [
+      'Use LED torches or lanterns, not candles — candles cause shelter fires',
+      'Mark open manholes, broken steps and wires with cloth and keep everyone away',
+      'At night do not walk through moving water — depth and current are invisible',
+      'Keep a light visible at your position so rescuers can find you',
+      'Conserve phone battery: torch mode sparingly, brightness low, airplane mode between checks',
+    ],
+    followups: ['Power outage safety?', 'What should I carry during evacuation?'],
+  },
+  {
+    id: 'solar_charging',
+    title: 'Keeping devices powered',
+    keywords: ['charging', 'battery', 'power bank', 'solar', 'phone battery', 'dying phone'],
+    hazard: 'general',
+    phase: 'during',
+    hotline: '112',
+    body: ['Your phone is your lifeline: SOS, location, this assistant and the emergency numbers live in it. Budget its battery like drinking water.'],
+    bullets: [
+      'Airplane mode between checks; radios are the biggest drain',
+      'Lower brightness, close background apps, disable vibration',
+      'Charge power banks first, phones second',
+      'A car battery, solar panel or generator at a relief point can top up — ask the manager',
+      'Keep the SOS screen ready: 20% battery is enough for hours of standby',
+      'After a call, SMS is more battery-efficient than a data connection',
+    ],
+    followups: ['Power outage safety?', 'How do I trigger an SOS?'],
+  },
+  {
+    id: 'after_landslide',
+    title: 'After a landslide',
+    keywords: ['after landslide', 'debris cleared', 'slope safe', 'return after slide', 'buried'],
+    hazard: 'landslide',
+    phase: 'after',
+    hotline: '1078',
+    body: ['Landslides repeat: the slope that failed once is the slope most likely to fail again in the next rain.'],
+    bullets: [
+      'Do not return until geologists or the district authority clear the slope',
+      'Watch for secondary slides after every new spell of rain',
+      'Report new cracks, leaning poles or springs to 1078 immediately',
+      'Divert roof and road runoff away from the scarred slope face',
+      'Replant bare slope surfaces quickly — roots hold soil',
+      'If a stream turns muddy or drops suddenly, a slide may have dammed it upstream — evacuate the valley floor',
+    ],
+    followups: ['What are landslide warning signs?', 'What should I do during a landslide?'],
+  },
 ];
 
 /* ------------------------------------------------------------------ */
@@ -1093,6 +1368,169 @@ export function knowledgeStats() {
     entries: KNOWLEDGE_BASE.length,
     bullets: KNOWLEDGE_BASE.reduce((a, e) => a + e.bullets.length, 0),
     hazards: new Set(KNOWLEDGE_BASE.map((e) => e.hazard)).size,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Three-tier orchestrator: cloud LLM → tiny offline LLM → local KB    */
+/* ------------------------------------------------------------------ */
+
+/** Compact verified-data summary handed to every LLM tier as grounding. */
+export function systemDataSummary(ctx: AssistantContext): string {
+  const a = ctx.analysis;
+  const lines: string[] = [];
+  lines.push(`Location: ${ctx.locationName ?? 'monitored district'} | weather: ${ctx.weatherSummary ?? 'unavailable'}`);
+  if (ctx.disturbanceSummary) lines.push(`Forecast: ${ctx.disturbanceSummary}`);
+  lines.push(
+    `Hazard now: flood ${Math.round(a.hazard.floodPressure * 100)}%, landslide ${Math.round(
+      a.hazard.landslidePressure * 100,
+    )}%, fire ${Math.round(a.hazard.firePressure * 100)}%.`,
+  );
+  const worst = a.zones[0];
+  if (worst) {
+    lines.push(`Highest risk zone: ${ZONE_BY_ID[worst.zoneId]?.name ?? worst.zoneId} (${Math.round(worst.risk)}/100).`);
+  }
+  lines.push(`Roads out of service: ${a.graph.removed.length}.`);
+  const free = a.shelters.reduce((s, x) => s + x.available, 0);
+  lines.push(`Shelter spaces free: ${free}.`);
+  if (a.actions[0]) lines.push(`Top action: ${a.actions[0].title}.`);
+  return lines.join('\n');
+}
+
+function kbToText(e: (typeof KNOWLEDGE_BASE)[number]): string {
+  return [e.title.toUpperCase(), ...e.body, ...e.bullets.map((b) => `- ${b}`)].join('\n');
+}
+
+export interface RetrievalBundle {
+  urgency: UrgencyAssessment;
+  /** top KB topics, verbatim, used as grounding for the LLM tiers */
+  topics: string[];
+  topicTitles: string[];
+  systemData: string;
+}
+
+/** Runs the urgency pre-pass + KB retrieval + system-data summary in one shot. */
+export function retrieveForLlm(query: string, ctx: AssistantContext): RetrievalBundle {
+  const urgency = detectUrgency(query);
+  const tokens = tokenize(query);
+  const topic = detectHazardTopic(query);
+  const ranked = KNOWLEDGE_BASE.map((e) => ({
+    e,
+    s: scoreEntry(e, tokens) + (topic && e.hazard === topic ? 3.2 : 0),
+  })).sort((x, y) => y.s - x.s);
+  const strong = ranked.filter((r) => r.s >= 3).slice(0, 3);
+  return {
+    urgency,
+    topics: strong.map((r) => kbToText(r.e)),
+    topicTitles: strong.map((r) => r.e.title),
+    systemData: systemDataSummary(ctx),
+  };
+}
+
+/** Builds the system prompt that keeps a tiny model disciplined. */
+export function buildTinySystemPrompt(bundle: RetrievalBundle, ctx: AssistantContext, language?: string): string {
+  const rules: string[] = [
+    'You are REACH Assistant, an emergency advisor for disasters in India (floods, landslides, wildfires, cyclones, earthquakes).',
+    'Answer ONLY from the FACTS and TOPICS below. If the answer is not there, say plainly that you do not know.',
+    'Be calm and concrete. Short sentences. Maximum 150 words. Prefer numbered actions.',
+    'Never invent live data: the FACTS section is the only current information that exists.',
+    'End your reply with one final line in exactly this form: Emergency number: <number> — <what it is for>.',
+  ];
+  if (bundle.urgency.urgent) {
+    rules.push(
+      `THE SITUATION IS URGENT: ${bundle.urgency.reason}. Begin with the hotline number ${bundle.urgency.hotline?.number} and the single most important immediate action, in that order.`,
+    );
+  }
+  if (language) {
+    rules.push(`Reply in this language: ${language}. Keep place names and numbers as-is.`);
+  }
+  if (ctx.profile) rules.push(`User context: ${ctx.profile}.`);
+  rules.push('', '=== FACTS (verified system data) ===', bundle.systemData);
+  if (bundle.topics.length) {
+    rules.push('', '=== TOPICS (approved guidance you may paraphrase) ===', ...bundle.topics);
+  }
+  return rules.join('\n');
+}
+
+const HOTLINE_LINE = /Emergency number:\s*([0-9+\-() ]{3,20})\s*[—\-–]\s*(.+)/i;
+
+export interface TinyAnswerOptions {
+  model?: TinyModelId;
+  language?: string;
+  onDelta?: (full: string) => void;
+  signal?: AbortSignal;
+}
+
+export interface TinyAnswerResult {
+  reply: AssistantReply;
+  /** which engine tier actually produced the text */
+  tier: 'tiny';
+}
+
+/**
+ * Streams an answer from the tiny offline model and assembles it into the
+ * same AssistantReply shape as every other tier, so the UI never special-cases.
+ */
+export async function answerWithTiny(
+  query: string,
+  history: { role: 'user' | 'assistant'; content: string }[],
+  ctx: AssistantContext,
+  opts: TinyAnswerOptions = {},
+): Promise<TinyAnswerResult> {
+  const { ensureTinyEngine, tinyChatStream, TINY_MODELS } = await import('./tinyLlm');
+  const model = opts.model ?? 'qwen-0.5b';
+  await ensureTinyEngine(model);
+
+  const bundle = retrieveForLlm(query, ctx);
+  const system = buildTinySystemPrompt(bundle, ctx, opts.language);
+
+  let full = await tinyChatStream(system, [...history.slice(-6), { role: 'user', content: query }], {
+    onDelta: (f) => opts.onDelta?.(f),
+    signal: opts.signal,
+  });
+
+  // The 0.5B model sometimes forgets the hotline line — append the correct one.
+  let hotline = bundle.urgency.urgent && bundle.urgency.hotline ? bundle.urgency.hotline : undefined;
+  const m = full.match(HOTLINE_LINE);
+  if (m) {
+    hotline = hotlineByNumber(m[1].trim());
+    full = full.replace(HOTLINE_LINE, '').trim();
+  }
+  if (!hotline) hotline = hotlineForSituation(`${query} ${full}`);
+
+  const blocks = full
+    .split(/\n{2,}/)
+    .map((b) => b.trim())
+    .filter(Boolean);
+  const bullets: string[] = [];
+  const paragraphs: string[] = [];
+  for (const block of blocks) {
+    const lines = block.split('\n').map((l) => l.trim());
+    if (lines.length > 1 && lines.every((l) => /^(\d+[.)]|[-*•])\s+/.test(l))) {
+      lines.forEach((l) => bullets.push(l.replace(/^(\d+[.)]|[-*•])\s+/, '')));
+    } else {
+      paragraphs.push(block.replace(/\n/g, ' '));
+    }
+  }
+
+  const info = TINY_MODELS[model];
+  return {
+    tier: 'tiny',
+    reply: {
+      id: `tiny_${Date.now()}`,
+      kind: 'chat',
+      badge: `OFFLINE AI · ${info.label} · WEBGPU · NO INTERNET NEEDED`,
+      title: bundle.urgency.urgent ? `URGENT — ${bundle.urgency.reason}` : 'Offline AI answer',
+      body: paragraphs.length ? paragraphs : ['The model returned an empty answer. Retry, or fall back to the knowledge base.'],
+      bullets,
+      sources: [`Tiny LLM (${info.label}) grounded in REACH knowledge base`, 'REACH live situation brief'],
+      disclaimer: 'Generated on-device by a small AI model. Numbers and live conditions come from REACH; wording is the model\u2019s.',
+      confidence: 0.72,
+      followups: bundle.topicTitles.length ? bundle.topicTitles : SUGGESTED_QUESTIONS.slice(0, 3),
+      hotline,
+      urgent: bundle.urgency.urgent,
+      urgentReason: bundle.urgency.reason,
+    },
   };
 }
 

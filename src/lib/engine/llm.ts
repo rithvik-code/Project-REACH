@@ -120,9 +120,15 @@ export async function chatComplete(
   brief: string,
   profile: string,
   offline: boolean,
+  language?: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  const system = buildSystemPrompt(brief, profile, offline);
+  const system = [
+    buildSystemPrompt(brief, profile, offline),
+    language ? `The user is talking to you by voice in ${language}. Reply in that same language, in plain speakable sentences (no markdown symbols).` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
 
   if (llm.provider === 'gemini') {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(

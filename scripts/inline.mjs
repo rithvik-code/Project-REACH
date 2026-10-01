@@ -9,9 +9,14 @@ const html = readFileSync(join(dist, 'index.html'), 'utf8');
 const assetsDir = join(dist, 'assets');
 const assets = readdirSync(assetsDir);
 
-const jsFile = assets.find((f) => f.endsWith('.js'));
-const cssFile = assets.find((f) => f.endsWith('.css'));
-if (!jsFile) throw new Error('no built JS asset found in dist/assets');
+// Take the entry script straight from index.html — the build may also emit
+// other chunks (e.g. the dynamic WebLLM bundle) that must NOT be inlined.
+const entryMatch = html.match(/<script type="module"[^>]*src="([^"]+)"[^>]*><\/script>/);
+if (!entryMatch) throw new Error('no module entry script found in dist/index.html');
+const jsFile = entryMatch[1].split('/').pop();
+if (!jsFile || !assets.includes(jsFile)) throw new Error(`entry asset ${jsFile} missing from dist/assets`);
+const cssMatch = html.match(/<link rel="stylesheet"[^>]*href="([^"]+)"[^>]*>/);
+const cssFile = cssMatch ? cssMatch[1].split('/').pop() : undefined;
 
 const js = readFileSync(join(assetsDir, jsFile), 'utf8');
 const css = cssFile ? readFileSync(join(assetsDir, cssFile), 'utf8') : '';

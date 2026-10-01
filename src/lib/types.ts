@@ -436,3 +436,99 @@ export interface Checklist {
   title: string;
   tasks: ChecklistTask[];
 }
+
+/* ------------------------------------------------------------------ */
+/* Tiny offline LLM (WebLLM / WebGPU)                                  */
+/* ------------------------------------------------------------------ */
+
+export type TinyModelId = 'qwen-0.5b' | 'llama-1b';
+
+export interface TinyModelInfo {
+  id: TinyModelId;
+  label: string;
+  /** WebLLM prebuilt model id */
+  modelId: string;
+  sizeMb: number;
+  note: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Voice conversation                                                  */
+/* ------------------------------------------------------------------ */
+
+export type VoicePhase = 'idle' | 'listening' | 'thinking' | 'speaking';
+export type VoiceEngineKind = 'webspeech' | 'whisper' | 'none';
+
+/* ------------------------------------------------------------------ */
+/* Global disaster feeds (USGS / GDACS / ReliefWeb)                    */
+/* ------------------------------------------------------------------ */
+
+export type GlobalEventSource = 'usgs' | 'gdacs' | 'reliefweb';
+export type GlobalEventKind = 'earthquake' | 'flood' | 'cyclone' | 'wildfire' | 'volcano' | 'drought' | 'other';
+
+export interface GlobalEvent {
+  id: string;
+  source: GlobalEventSource;
+  kind: GlobalEventKind;
+  title: string;
+  place: string;
+  lat: number;
+  lng: number;
+  /** epoch ms of the event itself */
+  at: number;
+  /** epoch ms when we ingested it */
+  fetchedAt: number;
+  /** 0..100 normalised severity for colouring and ranking */
+  severity: number;
+  /** source-native rating kept verbatim ("M 6.3", "ORANGE alert") */
+  severityLabel: string;
+  url?: string;
+  detail?: string;
+  country?: string;
+}
+
+export type ProximityRing = 'severe' | 'high' | 'watch' | 'far';
+
+export interface ProximityAssessment {
+  event: GlobalEvent;
+  distanceKm: number;
+  ring: ProximityRing;
+  /** bearing from home toward the event, 0 = north */
+  bearingDeg: number;
+  compass: string;
+}
+
+export interface FloodFlow {
+  bearingDeg: number;
+  compass: string;
+  /** total elevation drop over the sampled window */
+  dropM: number;
+  sampledKm: number;
+  confidence: 'low' | 'medium' | 'high';
+}
+
+/* ------------------------------------------------------------------ */
+/* Broadcasts (management portal → citizen portal)                     */
+/* ------------------------------------------------------------------ */
+
+export interface Broadcast {
+  id: string;
+  at: number;
+  author: string;
+  severity: 'info' | 'warning' | 'critical';
+  title: string;
+  body: string;
+  area?: string;
+  synced: boolean;
+}
+
+/* ------------------------------------------------------------------ */
+/* Portals + Supabase                                                  */
+/* ------------------------------------------------------------------ */
+
+export type PortalKind = 'citizen' | 'management';
+
+export interface SupabaseConfig {
+  url: string;
+  anonKey: string;
+}

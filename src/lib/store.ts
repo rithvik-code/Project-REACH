@@ -5,13 +5,20 @@ import { DEFAULT_CONTACTS } from './data/emergencyContacts';
 import { DEFAULT_SCENARIO } from './engine/hazard';
 import type {
   BasemapKind,
+  Broadcast,
   CommunityReport,
   EmergencyContact,
+  GlobalEvent,
+  GlobalEventSource,
   MissingPerson,
+  PortalKind,
   PreviewDevice,
   RoadClosure,
   Scenario,
   SosAlert,
+  SupabaseConfig,
+  TinyModelId,
+  VoicePhase,
   WeatherSnapshot,
 } from './types';
 import { uid } from './geo';
@@ -20,6 +27,7 @@ import type { AssistantReply } from './engine/assistant';
 import type { LatLng, RealRoute } from './engine/directions';
 import { DEFAULT_LOCATION_ID, LOCATION_BY_ID } from './data/india';
 import { fetchWeather, offlineWeather, readCachedWeather, WEATHER_TTL_MS } from './engine/weather';
+import { cacheFeeds, fetchGlobalFeeds, readCachedFeeds } from './engine/globalFeeds';
 
 export interface LlmConfig {
   /** 'offline' = built-in knowledge base, 'online' = call an LLM provider */
@@ -28,6 +36,10 @@ export interface LlmConfig {
   apiKey: string;
   model: string;
   baseUrl: string;
+  /** which brain produced the last answer: kb = local retrieval, tiny = on-device model, cloud = remote LLM */
+  engine: 'kb' | 'tiny' | 'cloud';
+  /** voice conversation mode (speak + spoken replies) */
+  voice: boolean;
 }
 
 export const DEFAULT_LLM: LlmConfig = {
@@ -36,7 +48,21 @@ export const DEFAULT_LLM: LlmConfig = {
   apiKey: '',
   model: 'gpt-4o-mini',
   baseUrl: 'https://api.openai.com/v1',
+  engine: 'kb',
+  voice: false,
 };
+
+/** A situation report dropped by a citizen onto the global map. */
+export interface SitrepEntry {
+  id: string;
+  at: number;
+  kind: 'safe' | 'need_help' | 'hazard' | 'damage';
+  text: string;
+  lat: number;
+  lng: number;
+  eventId?: string;
+  synced: boolean;
+}
 
 export interface RoutePin extends LatLng {
   label: string;
@@ -44,6 +70,7 @@ export interface RoutePin extends LatLng {
 
 export type NavKey =
   | 'home'
+  | 'global'
   | 'command'
   | 'map'
   | 'saferoute'
@@ -215,6 +242,45 @@ interface State {
   setResidentProfile: (p: string) => void;
   assistantBusy: boolean;
   setAssistantBusy: (b: boolean) => void;
+
+  /* tiny offline LLM + voice */
+  tinyModel: TinyModelId;
+  setTinyModel: (m: TinyModelId) => void;
+  voiceLang: string;
+  setVoiceLang: (l: string) => void;
+  voicePhase: VoicePhase;
+  setVoicePhase: (p: VoicePhase) => void;
+
+  /* portals (citizen / management) */
+  portal: PortalKind;
+  setPortal: (p: PortalKind) => void;
+  /** auto-granted when an event enters the 10 km watch ring around home */
+  coordinatorUnlocked: boolean;
+  setCoordinatorUnlocked: (v: boolean) => void;
+
+  /* global map */
+  globalEvents: GlobalEvent[];
+  setGlobalEvents: (e: GlobalEvent[]) => void;
+  globalSources: Partial<Record<GlobalEventSource, 'ok' | 'error'>>;
+  setGlobalSources: (s: Partial<Record<GlobalEventSource, 'ok' | 'error'>>) => void;
+  globalFetchedAt: number | null;
+  setGlobalFetchedAt: (t: number | null) => void;
+  homePin: { lat: number; lng: number; label: string } | null;
+  setHomePin: (p: { lat: number; lng: number; label: string } | null) => void;
+  pickingHome: boolean;
+  setPickingHome: (v: boolean) => void;
+  sitreps: SitrepEntry[];
+  addSitrep: (r: Omit<SitrepEntry, 'id' | 'at' | 'synced'>) => void;
+
+  /* broadcasts (management → citizen) */
+  broadcasts: Broadcast[];
+  addBroadcast: (b: Omit<Broadcast, 'id' | 'at' | 'synced'>) => string;
+
+  /* supabase shared sync */
+  supabase: SupabaseConfig | null;
+  setSupabaseConfig: (c: SupabaseConfig | null) => void;
+  syncStatus: 'idle' | 'connected' | 'error';
+  setSyncStatus: (s: 'idle' | 'connected' | 'error') => void;
 
   /* derived */
   syncTick: number;
@@ -517,6 +583,62 @@ export const useReach = create<State>()(
       assistantBusy: false,
       setAssistantBusy: (b) => set({ assistantBusy: b }),
 
+      tinyModel: 'qwen-0.5b',
+      setTinyModel: (m) => set({ tinyModel: m }),
+      voiceLang: 'en-IN',
+      setVoiceLang: (l) => set({ voiceLang: l }),
+      voicePhase: 'idle',
+      setVoicePhase: (p) => set({ voicePhase: p }),
+
+      portal: 'citizen',
+      setPortal: (p) => set({ portal: p }),
+      coordinatorUnlocked: false,
+      setCoordinatorUnlocked: (v) => set({ coordinatorUnlocked: v }),
+
+      globalEvents: [],
+      setGlobalEvents: (e) => set({ globalEvents: e }),
+      globalSources: {},
+      setGlobalSources: (s) => set({ globalSources: s }),
+      globalFetchedAt: null,
+      setGlobalFetchedAt: (t) => set({ globalFetchedAt: t }),
+      homePin: null,
+      setHomePin: (p) => set({ homePin: p }),
+      pickingHome: false,
+      setPickingHome: (v) => set({ pickingHome: v }),
+      sitreps: [],
+      addSitrep: (r) =>
+        set((s) => ({
+          sitreps: [
+            { ...r, id: uid('sit'), at: now(), synced: get().connectivity === 'online' },
+            ...s.sitreps,
+          ],
+        })),
+
+      broadcasts: [
+        {
+          id: 'bc_seed_1',
+          at: now() - 1000 * 60 * 24,
+          author: 'District Control Room',
+          severity: 'warning',
+          title: 'R14 Old Town Ghat Road closed',
+          body: 'Causeway submerged. Use the Northgate bypass until further notice. Boats staged at the Old Town ghat steps.',
+          area: 'Old Town / Riverbend',
+          synced: true,
+        },
+      ],
+      addBroadcast: (b) => {
+        const id = uid('bc');
+        set((s) => ({
+          broadcasts: [{ ...b, id, at: now(), synced: get().connectivity === 'online' }, ...s.broadcasts],
+        }));
+        return id;
+      },
+
+      supabase: null,
+      setSupabaseConfig: (c) => set({ supabase: c }),
+      syncStatus: 'idle',
+      setSyncStatus: (s) => set({ syncStatus: s }),
+
       syncTick: 0,
       bumpSync: () => set((s) => ({ syncTick: s.syncTick + 1 })),
     }),
@@ -539,10 +661,63 @@ export const useReach = create<State>()(
         basemap: s.basemap,
         liveLocationId: s.liveLocationId,
         llm: s.llm,
+        tinyModel: s.tinyModel,
+        voiceLang: s.voiceLang,
+        portal: s.portal,
+        coordinatorUnlocked: s.coordinatorUnlocked,
+        homePin: s.homePin,
+        sitreps: s.sitreps,
+        broadcasts: s.broadcasts,
+        supabase: s.supabase,
       }),
     },
   ),
 );
+
+/**
+ * Keeps the global disaster feed in step: fetches live when online (every 5
+ * min), falls back to the last cached snapshot offline.
+ */
+export function useGlobalFeedsSync() {
+  const connectivity = useReach((s) => s.connectivity);
+  const simulateOffline = useReach((s) => s.simulateOffline);
+  const setEvents = useReach((s) => s.setGlobalEvents);
+  const setSources = useReach((s) => s.setGlobalSources);
+  const setFetchedAt = useReach((s) => s.setGlobalFetchedAt);
+  const timer = useRef<number | null>(null);
+  const online = connectivity === 'online' && !simulateOffline;
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!online) {
+      const cached = readCachedFeeds();
+      if (cached) {
+        setEvents(cached.events);
+        setSources(cached.sources);
+        setFetchedAt(cached.fetchedAt);
+      }
+      return;
+    }
+    const load = async () => {
+      try {
+        const res = await fetchGlobalFeeds();
+        if (cancelled) return;
+        setEvents(res.events);
+        setSources(res.sources);
+        setFetchedAt(res.fetchedAt);
+        cacheFeeds(res);
+      } catch {
+        /* keep previous snapshot */
+      }
+    };
+    void load();
+    timer.current = window.setInterval(() => void load(), 5 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      if (timer.current) window.clearInterval(timer.current);
+    };
+  }, [online, setEvents, setSources, setFetchedAt]);
+}
 
 /** Shared analysis selector — recomputed whenever any input changes. */
 export function useAnalysis(): Analysis {
